@@ -58,6 +58,14 @@ main() {
   // converting idempotent.
   check("xn--bcher-kva.example", "xn--bcher-kva.example");
 
+  // A label needing no decoding may sit before one that does, so a label
+  // validated where it stands is followed by one that has to be decoded first.
+  check("bücher.xn--bcher-kva.example", "xn--bcher-kva.xn--bcher-kva.example");
+
+  // The prefix that marks a label as encoded is only recognized once the domain
+  // has been mapped, so an uppercase prefix is folded and decoded like any other.
+  check("XN--BCHER-KVA.example", "xn--bcher-kva.example");
+
   // Mapping lowercases and folds, so a domain converts the same however it was
   // written.
   check("EXAMPLE.COM", "example.com");
