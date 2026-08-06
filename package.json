@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "libidna",
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "prettier --check ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/libidna.git"
+  },
+  "author": "Holepunch",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/holepunchto/libidna/issues"
+  },
+  "homepage": "https://github.com/holepunchto/libidna#readme",
+  "devDependencies": {
+    "cmake-fetch": "^1.0.0",
+    "cmake-fuzz": "^0.1.0",
+    "cmake-ucd": "^0.1.0",
+    "prettier": "^3.8.3",
+    "prettier-config-holepunch": "^2.0.0"
+  }
+}
