@@ -2,9 +2,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <time.h>
 #include <utf.h>
 #include <utf/string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 // A set of representative domains, chosen to exercise the different paths that
 // the converter takes: a label to decode beside one to leave alone, a plain
@@ -34,9 +39,16 @@ static const struct {
 
 static double
 now_ns(void) {
+#ifdef _WIN32
+  LARGE_INTEGER frequency, counter;
+  QueryPerformanceFrequency(&frequency);
+  QueryPerformanceCounter(&counter);
+  return (double) counter.QuadPart * 1e9 / (double) frequency.QuadPart;
+#else
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double) ts.tv_sec * 1e9 + (double) ts.tv_nsec;
+#endif
 }
 
 int
