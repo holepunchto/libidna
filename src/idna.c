@@ -370,12 +370,6 @@ int
 idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
   int err;
 
-  // A domain is commonly the result of a UTF-8 decode,
-  // which replaces every ill-formed byte sequence with U+FFFD. As U+FFFD is
-  // disallowed, and so fails the validity criteria, such a domain may be
-  // rejected without decoding it.
-  if (!utf8_validate(input.data, input.len)) return -1;
-
   utf32_string_t decoded, normalized, converted, label;
 
   utf32_string_init(&decoded);
@@ -388,7 +382,25 @@ idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
   err = utf32_string_reserve(&decoded, utf32_length_from_utf8(input.data, input.len));
   if (err < 0) goto err;
 
+  // The decoder both validates and converts in a single pass, stopping short
+  // and reporting a length of zero the moment it meets an ill-formed byte
+  // sequence. An empty input decodes to nothing without being ill-formed, so
+  // only a length of zero from a non-empty input is a rejection. Validating
+  // the input separately beforehand would be a wasted pass over it, and a
+  // domain that carries a genuine U+FFFD from an earlier lossy decode is still
+  // rejected, that code point being disallowed by the validity criteria.
   decoded.len = utf8_convert_to_utf32(input.data, input.len, decoded.data);
+
+  if (decoded.len == 0 && input.len != 0) goto err;
+
+  // Mapping and decomposing rarely lengthen a domain, so the normalized domain
+  // tends to end up close to the decoded one in size. Reserving that much up
+  // front grows the buffer in one step for a domain that neither maps to nor
+  // decomposes into more code points than it started with, rather than letting
+  // it double its way there a code point at a time. A domain that does lengthen
+  // grows the buffer the rest of the way as it goes.
+  err = utf32_string_reserve(&normalized, decoded.len);
+  if (err < 0) goto err;
 
   // 1. Map each code point according to its status in the IDNA mapping table and
   //    2. normalize the domain to Unicode Normalization Form C, decomposing as
@@ -419,11 +431,55 @@ idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
     }
   }
 
-  normalized.len = normalize_recompose(normalized.data, normalized.len);
+  // A domain of nothing but ASCII is already in Normalization Form C: no ASCII
+  // code point has a canonical decomposition, a nonzero combining class, or a
+  // composition with any other, so mapping leaves it as it stands and there is
+  // nothing for recomposition to reorder or combine. Every byte of an all-ASCII
+  // input decodes to a single code point, so the decoded length matching the
+  // input length is exactly the condition under which recomposition is a no-op
+  // and may be skipped, which also spares the whole-domain pass a Punycode
+  // label makes over ASCII that only decodes to Unicode later, label by label.
+  if (decoded.len != input.len) {
+    normalized.len = normalize_recompose(normalized.data, normalized.len);
+  }
 
-  // 3. Break the domain into labels at U+002E ( . ) FULL STOP, 4. convert every
-  //    label that is Punycode encoded back to Unicode, and verify that the label
-  //    meets the validity criteria.
+  // The converted domain differs from the normalized one only in its Punycode
+  // labels, which are decoded back to Unicode. A domain with no such label is
+  // therefore already its own converted form, and every label is checked
+  // against the validity criteria where it stands, without a second buffer.
+  const utf32_t *domain;
+  size_t domain_len;
+
+  // 3. Break the domain into labels at U+002E ( . ) FULL STOP and verify that
+  //    each label meets the validity criteria. A Punycode label cannot be
+  //    validated until it has been decoded, so meeting one sends the whole
+  //    domain down the rebuild path below.
+  for (size_t i = 0, start = 0; i <= normalized.len; i++) {
+    if (i != normalized.len && normalized.data[i] != '.') continue;
+
+    if (idna__has_ace_prefix(&normalized.data[start], i - start)) goto rebuild;
+
+    if (!idna__is_valid_label(&normalized.data[start], i - start)) goto err;
+
+    start = i + 1;
+  }
+
+  domain = normalized.data;
+  domain_len = normalized.len;
+
+  goto validated;
+
+rebuild:
+  // A Punycode label decodes to at most as many code points as it was encoded
+  // from, so the converted domain is no longer than the normalized one but for
+  // what normalizing a decoded label adds, which reserves its own room. This
+  // covers the common case in a single allocation rather than growing the
+  // buffer label by label.
+  err = utf32_string_reserve(&converted, normalized.len);
+  if (err < 0) goto err;
+
+  // 4. Convert every label that is Punycode encoded back to Unicode, verifying
+  //    each label against the validity criteria as before.
   for (size_t i = 0, start = 0; i <= normalized.len; i++) {
     if (i != normalized.len && normalized.data[i] != '.') continue;
 
@@ -508,12 +564,16 @@ idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
     start = i + 1;
   }
 
+  domain = converted.data;
+  domain_len = converted.len;
+
+validated:
   // A Bidi domain name is a domain name containing at least one character with
   // Bidi_Class R, AL, or AN.
-  for (size_t i = 0; i < converted.len && !bidi; i++) {
-    if (converted.data[i] < IDNA_FIRST_RTL) continue;
+  for (size_t i = 0; i < domain_len && !bidi; i++) {
+    if (domain[i] < IDNA_FIRST_RTL) continue;
 
-    switch (idna__bidi_class(converted.data[i])) {
+    switch (idna__bidi_class(domain[i])) {
     case idna__bidi_class_r:
     case idna__bidi_class_al:
     case idna__bidi_class_an:
@@ -528,30 +588,47 @@ idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
   // The last of the validity criteria, which only the labels of a Bidi domain
   // name are subject to.
   if (bidi) {
-    for (size_t i = 0, start = 0; i <= converted.len; i++) {
-      if (i != converted.len && converted.data[i] != '.') continue;
+    for (size_t i = 0, start = 0; i <= domain_len; i++) {
+      if (i != domain_len && domain[i] != '.') continue;
 
-      if (!idna__check_bidi(&converted.data[start], i - start)) goto err;
+      if (!idna__check_bidi(&domain[start], i - start)) goto err;
 
       start = i + 1;
     }
   }
 
+  // A domain of nothing but ASCII is emitted unchanged, one byte per code
+  // point, so its result is exactly its own length and is reserved up front to
+  // append it in one step rather than a label at a time. A domain with a label
+  // to encode is left alone: Punycode reserves room by a far looser bound, and
+  // reserving the length here as well would only allocate twice. The test costs
+  // a scan of the domain but stops at the first non-ASCII code point, so it is
+  // cheap for the very domains it declines to reserve for.
+  if (idna__is_ascii(domain, domain_len)) {
+    err = utf8_string_reserve(result, result->len + domain_len);
+    if (err < 0) goto err;
+  }
+
   // ToASCII step 3: convert every label with non-ASCII characters into Punycode
   // and prefix it by "xn--". Step 4, verifying the DNS length restrictions, is
   // skipped as VerifyDnsLength is false.
-  for (size_t i = 0, start = 0; i <= converted.len; i++) {
-    if (i != converted.len && converted.data[i] != '.') continue;
+  for (size_t i = 0, start = 0; i <= domain_len; i++) {
+    if (i != domain_len && domain[i] != '.') continue;
 
     if (start > 0) {
       err = utf8_string_append_character(result, '.');
       if (err < 0) goto err;
     }
 
-    if (idna__is_ascii(&converted.data[start], i - start)) {
+    if (idna__is_ascii(&domain[start], i - start)) {
+      // Every code point of an ASCII label is a single byte, so the whole run
+      // is appended at once rather than a byte at a time, each of which would
+      // otherwise reserve room for and store one byte on its own.
+      err = utf8_string_reserve(result, result->len + (i - start));
+      if (err < 0) goto err;
+
       for (size_t j = start; j < i; j++) {
-        err = utf8_string_append_character(result, (utf8_t) converted.data[j]);
-        if (err < 0) goto err;
+        result->data[result->len++] = (utf8_t) domain[j];
       }
     } else {
       err = utf8_string_append_literal(result, (utf8_t *) IDNA_ACE_PREFIX, IDNA_ACE_PREFIX_LEN);
@@ -568,7 +645,7 @@ idna_url_to_ascii(utf8_string_view_t input, utf8_string_t *result) {
 
       size_t encoded_len;
 
-      err = punycode_encode_utf8(&converted.data[start], i - start, &result->data[result->len], &encoded_len);
+      err = punycode_encode_utf8(&domain[start], i - start, &result->data[result->len], &encoded_len);
       if (err < 0) goto err;
 
       result->len += encoded_len;
