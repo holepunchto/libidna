@@ -94,8 +94,13 @@ install(FILES include/idna.h DESTINATION include)
 install(FILES "${idna_tables_header}" DESTINATION include/idna)
 
 if(PROJECT_IS_TOP_LEVEL)
+  set(BENCH OFF CACHE BOOL "Build the benchmarks")
+
   enable_testing()
 
-  add_subdirectory(bench)
+  if(BENCH)
+    add_subdirectory(bench)
+  endif()
+
   add_subdirectory(test)
 endif()
