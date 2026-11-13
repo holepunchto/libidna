@@ -12,6 +12,8 @@ fetch_package("github:holepunchto/libnormalize")
 
 include(cmake/tables.cmake)
 
+get_property(shared GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS)
+
 add_library(idna OBJECT)
 
 add_dependencies(idna idna_tables)
@@ -20,7 +22,7 @@ set_target_properties(
   idna
   PROPERTIES
   C_STANDARD 11
-  POSITION_INDEPENDENT_CODE ON
+  POSITION_INDEPENDENT_CODE ${shared}
 )
 
 target_sources(
@@ -43,23 +45,25 @@ target_include_directories(
     $<TARGET_PROPERTY:normalize,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
-add_library(idna_shared SHARED)
+if(shared)
+  add_library(idna_shared SHARED)
 
-set_target_properties(
-  idna_shared
-  PROPERTIES
-  OUTPUT_NAME idna
-  WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
+  set_target_properties(
+    idna_shared
+    PROPERTIES
+    OUTPUT_NAME idna
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+  )
 
-target_link_libraries(
-  idna_shared
-  PUBLIC
-    idna
-    utf_shared
-    punycode_shared
-    normalize_shared
-)
+  target_link_libraries(
+    idna_shared
+    PUBLIC
+      idna
+      utf_shared
+      punycode_shared
+      normalize_shared
+  )
+endif()
 
 add_library(idna_static STATIC)
 
@@ -79,7 +83,11 @@ target_link_libraries(
     normalize_static
 )
 
-install(TARGETS idna_shared idna_static)
+install(TARGETS idna_static)
+
+if(shared)
+  install(TARGETS idna_shared)
+endif()
 
 install(FILES include/idna.h DESTINATION include)
 
