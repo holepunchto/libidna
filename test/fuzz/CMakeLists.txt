@@ -1,19 +1,7 @@
-list(APPEND fuzzers
-  url-to-ascii
+add_fuzz_executables(
+  url-to-ascii.c
+  PREFIX fuzz_
+  DURATION 600
+  LINK
+    idna::static
 )
-
-foreach(fuzzer IN LISTS fuzzers)
-  string(REPLACE "/" "_" name ${fuzzer})
-
-  add_fuzzer(
-    fuzz_${name}
-    ${fuzzer}.c
-    DURATION 600
-  )
-
-  target_link_libraries(
-    fuzz_${name}
-    PRIVATE
-      idna_static
-  )
-endforeach()

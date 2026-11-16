@@ -9,6 +9,20 @@ extern "C" {
 #include <utf.h>
 #include <utf/string.h>
 
+#if defined(_WIN32)
+#if defined(IDNA_BUILDING)
+#define IDNA_EXPORT __declspec(dllexport)
+#elif defined(IDNA_SHARED)
+#define IDNA_EXPORT __declspec(dllimport)
+#else
+#define IDNA_EXPORT
+#endif
+#elif defined(__GNUC__)
+#define IDNA_EXPORT __attribute__((visibility("default")))
+#else
+#define IDNA_EXPORT
+#endif
+
 /**
  * Converts a domain to its ASCII form as a URL parser needs it, appending it to
  * `result`.
@@ -29,7 +43,7 @@ extern "C" {
  *
  * https://www.unicode.org/reports/tr46/#ToASCII
  */
-int
+IDNA_EXPORT int
 idna_url_to_ascii(utf8_string_view_t domain, utf8_string_t *result);
 
 #ifdef __cplusplus

@@ -8,6 +8,6 @@ foreach(bench IN LISTS benches)
   target_link_libraries(
     bench_${bench}
     PRIVATE
-      idna_static
+      idna::static
   )
 endforeach()
